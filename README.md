@@ -1,0 +1,1 @@
+# nhom7-smarthome-hub
