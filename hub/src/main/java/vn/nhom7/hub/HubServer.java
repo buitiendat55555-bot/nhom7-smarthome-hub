@@ -10,11 +10,13 @@ import java.util.concurrent.Executors;
 public class HubServer {
 
     private final int port;
+    private final DeviceRegistry registry;
     private final ExecutorService pool = Executors.newFixedThreadPool(20);
     private volatile boolean running;
 
-    public HubServer(int port) {
+    public HubServer(int port, DeviceRegistry registry) {
         this.port = port;
+        this.registry = registry;
     }
 
     public void start() throws IOException {
@@ -24,7 +26,7 @@ public class HubServer {
             while (running) {
                 Socket socket = serverSocket.accept(); // chờ thiết bị kết nối
                 System.out.println("[HUB] Ket noi moi tu " + socket.getRemoteSocketAddress());
-                pool.execute(new ClientHandler(socket));
+                pool.execute(new ClientHandler(socket, registry)); // mọi luồng dùng chung một registry
             }
         } finally {
             pool.shutdown();
