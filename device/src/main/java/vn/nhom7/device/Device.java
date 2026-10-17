@@ -30,7 +30,7 @@ public class Device {
             }
         };
 
-        demo.connect("127.0.0.1", 5000);
+        demo.connect();
         Thread.sleep(30_000); // giữ chương trình 30 giây để thấy STATUS gửi mỗi 5 giây
         demo.disconnect();
     }
