@@ -1,8 +1,10 @@
 package vn.nhom7.hub;
 
+import vn.nhom7.common.Protocol;
+
 public class Hub {
 
     public static void main(String[] args) throws Exception {
-        new HubServer(5000).start();
+        new HubServer(Protocol.PORT).start();
     }
 }
