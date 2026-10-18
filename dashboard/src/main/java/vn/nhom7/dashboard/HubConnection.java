@@ -8,6 +8,7 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import vn.nhom7.common.JsonUtil;
 import vn.nhom7.common.Message;
@@ -20,6 +21,7 @@ public class HubConnection {
     private final String dashboardId;
     private final Consumer<Message> onMessage;
     private final Runnable onDisconnect;
+    private final AtomicInteger commandCounter = new AtomicInteger();
 
     private Socket socket;
     private PrintWriter out;
@@ -69,6 +71,19 @@ public class HubConnection {
             connected = false;
             onDisconnect.run();
         }
+    }
+
+    /**
+     * Gửi lệnh tới một thiết bị qua Hub. Trả về commandId để đối chiếu với ACK.
+     * AtomicInteger để hai lần bấm nhanh liên tiếp không bị trùng mã.
+     */
+    public String sendCommand(String deviceId, String action) {
+        String commandId = "c-" + commandCounter.incrementAndGet();
+        JsonObject p = new JsonObject();
+        p.addProperty("commandId", commandId);
+        p.addProperty("action", action);
+        send(new Message(MessageType.COMMAND, dashboardId, deviceId, p));
+        return commandId;
     }
 
     /** synchronized vì giao diện và luồng nghe có thể cùng gửi. */
