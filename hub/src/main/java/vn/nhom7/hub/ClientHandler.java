@@ -18,12 +18,14 @@ public class ClientHandler implements Runnable {
 
     private final Socket socket;
     private final DeviceRegistry registry;
+    private final AlertService alerts;
     private PrintWriter out;
     private volatile String clientId; // null cho tới khi REGISTER thành công
 
-    public ClientHandler(Socket socket, DeviceRegistry registry) {
+    public ClientHandler(Socket socket, DeviceRegistry registry, AlertService alerts) {
         this.socket = socket;
         this.registry = registry;
+        this.alerts = alerts;
     }
 
     @Override
@@ -46,6 +48,7 @@ public class ClientHandler implements Runnable {
             if (clientId != null) {
                 boolean wasDevice = registry.remove(clientId, this);
                 System.out.println("[HUB] Da go " + clientId + " khoi bang");
+                ActivityLogger.log("Ngat ket noi " + clientId);
                 if (wasDevice) {
                     JsonObject p = new JsonObject();
                     p.addProperty("deviceId", clientId);
@@ -113,22 +116,23 @@ public class ClientHandler implements Runnable {
         }
         if (!ok) {
             sendError("ID " + id + " dang duoc su dung");
+            ActivityLogger.log("Tu choi dang ky " + id + ": trung ID");
             return;
         }
 
         clientId = id;
+        ActivityLogger.log("Dang ky " + (isDashboard ? "Dashboard " : "thiet bi ") + id
+                + (isDashboard ? "" : " (" + msg.getString("deviceType") + ")"));
         JsonObject p = new JsonObject();
         p.addProperty("ok", true);
         p.addProperty("message", "Dang ky thanh cong");
         send(new Message(MessageType.ACK, Protocol.HUB_ID, id, p));
 
         if (isDashboard) {
-            // Dashboard mới vào: gửi ngay danh sách thiết bị hiện có
             JsonObject list = new JsonObject();
             list.add("devices", registry.toJsonArray());
             send(new Message(MessageType.DEVICE_LIST, Protocol.HUB_ID, id, list));
         } else {
-            // Thiết bị mới vào: báo cho mọi Dashboard
             broadcastDeviceUpdate(info);
         }
         registry.printTable();
@@ -140,7 +144,9 @@ public class ClientHandler implements Runnable {
             sendError("Chi thiet bi moi duoc gui STATUS");
             return;
         }
+        JsonObject before = d.getState();   // trạng thái cũ để so sánh
         d.updateState(msg.getPayload());
+        alerts.check(d, before, d.getState());
         broadcastDeviceUpdate(d);
     }
 
@@ -154,16 +160,20 @@ public class ClientHandler implements Runnable {
         DeviceInfo d = registry.getDevice(target);
         if (d == null) {
             sendError("Thiet bi " + target + " khong ton tai hoac da ngat ket noi");
+            ActivityLogger.log("Lenh tu " + clientId + " toi " + target + " that bai: khong tim thay thiet bi");
             return;
         }
-        // Gửi qua ClientHandler của thiết bị; "from" giữ là Dashboard để thiết bị biết trả ACK cho ai
         d.getHandler().send(new Message(MessageType.COMMAND, clientId, target, msg.getPayload()));
         System.out.println("[HUB] Chuyen COMMAND " + msg.getString("action")
                 + " tu " + clientId + " toi " + target);
+        ActivityLogger.log("Lenh " + msg.getString("action") + " (" + msg.getString("commandId")
+                + ") tu " + clientId + " toi " + target);
     }
 
     /** Thiết bị -> Hub -> đúng Dashboard đã ra lệnh. */
     private void handleAck(Message msg) {
+        ActivityLogger.log("Ket qua lenh " + msg.getString("commandId") + " tu " + clientId + ": "
+                + (msg.getBoolean("ok", false) ? "thanh cong" : "that bai") + " - " + msg.getString("message"));
         ClientHandler dash = registry.getDashboard(msg.getTo());
         if (dash == null) {
             System.out.println("[HUB] Bo qua ACK tu " + clientId + ": khong tim thay Dashboard " + msg.getTo());
