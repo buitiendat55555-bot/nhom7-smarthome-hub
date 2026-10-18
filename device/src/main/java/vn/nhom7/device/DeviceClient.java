@@ -11,22 +11,29 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import vn.nhom7.common.JsonUtil;
 import vn.nhom7.common.Message;
 import vn.nhom7.common.MessageType;
 import vn.nhom7.common.Protocol;
 
-/** Lớp cơ sở cho mọi thiết bị mô phỏng: kết nối Hub, đăng ký, gửi trạng thái, nhận lệnh. */
+/** Lớp cơ sở cho mọi thiết bị mô phỏng: kết nối Hub, đăng ký, gửi trạng thái, nhận lệnh, tự kết nối lại. */
 public abstract class DeviceClient {
+
+    public static final int RECONNECT_DELAY_SECONDS = 3;
 
     protected final String deviceId;
     protected final String deviceType;
     protected final String name;
 
+    private String host = Protocol.DEFAULT_HOST;
+    private int port = Protocol.PORT;
     private Socket socket;
     private PrintWriter out;
     private ScheduledExecutorService scheduler;
     private volatile boolean connected;
+    private volatile boolean stopped; // true khi người dùng chủ động ngắt -> không tự kết nối lại
+    private final AtomicBoolean reconnecting = new AtomicBoolean(); // tránh chạy 2 vòng thử lại cùng lúc
 
     protected DeviceClient(String deviceId, String deviceType, String name) {
         this.deviceId = deviceId;
@@ -45,14 +52,30 @@ public abstract class DeviceClient {
         connect(Protocol.DEFAULT_HOST, Protocol.PORT);
     }
 
-    /** Kết nối tới Hub, gửi REGISTER, bật luồng nghe lệnh và lịch gửi STATUS định kỳ. */
+    /** Kết nối tới Hub. Nếu thất bại vẫn bật vòng tự thử lại, rồi báo lỗi cho giao diện. */
     public void connect(String host, int port) throws IOException {
-        socket = new Socket(host, port);
-        out = new PrintWriter(
-                new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true);
+        this.host = host;
+        this.port = port;
+        stopped = false;
+        try {
+            openConnection();
+        } catch (IOException e) {
+            startReconnectLoop();
+            throw e;
+        }
+    }
+
+    /** Mở socket, bật luồng nghe, gửi REGISTER, bật lịch gửi STATUS. synchronized để không mở 2 kết nối cùng lúc. */
+    private synchronized void openConnection() throws IOException {
+        if (connected) {
+            return;
+        }
+        Socket s = new Socket(host, port);
+        socket = s;
+        out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8), true);
         connected = true;
 
-        Thread listener = new Thread(this::listen, deviceId + "-listener");
+        Thread listener = new Thread(() -> listen(s), deviceId + "-listener");
         listener.setDaemon(true);
         listener.start();
 
@@ -68,9 +91,9 @@ public abstract class DeviceClient {
     }
 
     /** Chạy trên luồng riêng: đọc từng dòng JSON Hub gửi xuống. */
-    private void listen() {
+    private void listen(Socket s) {
         try (BufferedReader in = new BufferedReader(
-                new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
+                new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = in.readLine()) != null) {
                 System.out.println("[" + deviceId + "] Nhan: " + line);
@@ -83,7 +106,40 @@ public abstract class DeviceClient {
             if (scheduler != null) {
                 scheduler.shutdownNow();
             }
+            if (!stopped) {
+                System.out.println("[" + deviceId + "] Se thu ket noi lai moi "
+                        + RECONNECT_DELAY_SECONDS + " giay");
+                startReconnectLoop();
+            }
         }
+    }
+
+    /** Luồng nền: cứ RECONNECT_DELAY_SECONDS giây thử kết nối lại một lần cho tới khi được. */
+    private void startReconnectLoop() {
+        if (stopped || !reconnecting.compareAndSet(false, true)) {
+            return;
+        }
+        Thread t = new Thread(() -> {
+            try {
+                while (!stopped && !connected) {
+                    Thread.sleep(RECONNECT_DELAY_SECONDS * 1000L);
+                    if (stopped) {
+                        break;
+                    }
+                    try {
+                        openConnection();
+                        System.out.println("[" + deviceId + "] Da ket noi lai Hub");
+                    } catch (IOException e) {
+                        System.out.println("[" + deviceId + "] Thu ket noi lai that bai: " + e.getMessage());
+                    }
+                }
+            } catch (InterruptedException ignored) {
+            } finally {
+                reconnecting.set(false);
+            }
+        }, deviceId + "-reconnect");
+        t.setDaemon(true);
+        t.start();
     }
 
     /** Chỉ xử lý message COMMAND; các loại khác (ví dụ ACK của Hub) chỉ in ra. */
@@ -117,7 +173,7 @@ public abstract class DeviceClient {
         send(MessageType.STATUS, null, getState());
     }
 
-    /** synchronized vì luồng nghe lệnh và luồng gửi định kỳ cùng ghi vào socket. */
+    /** synchronized vì luồng nghe lệnh, luồng gửi định kỳ và giao diện cùng ghi vào socket. */
     protected synchronized void send(MessageType type, String to, JsonObject payload) {
         if (!connected) {
             return;
@@ -125,7 +181,9 @@ public abstract class DeviceClient {
         out.println(JsonUtil.toJson(new Message(type, deviceId, to, payload))); // mỗi message một dòng
     }
 
+    /** Người dùng chủ động ngắt (đóng cửa sổ): dừng hẳn, không tự kết nối lại. */
     public void disconnect() {
+        stopped = true;
         connected = false;
         if (scheduler != null) {
             scheduler.shutdownNow();
