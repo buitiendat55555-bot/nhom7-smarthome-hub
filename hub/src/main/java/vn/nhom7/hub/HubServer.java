@@ -14,6 +14,7 @@ public class HubServer {
 
     private final int port;
     private final DeviceRegistry registry;
+    private final AlertService alerts;
     private final ExecutorService pool = Executors.newFixedThreadPool(20);
     private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor();
     private volatile boolean running;
@@ -21,6 +22,7 @@ public class HubServer {
     public HubServer(int port, DeviceRegistry registry) {
         this.port = port;
         this.registry = registry;
+        this.alerts = new AlertService(registry);
     }
 
     public void start() throws IOException {
@@ -29,10 +31,11 @@ public class HubServer {
         watchdog.scheduleAtFixedRate(this::checkTimeouts, 5, 5, TimeUnit.SECONDS);
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             System.out.println("[HUB] Dang lang nghe cong " + port);
+            ActivityLogger.log("Hub khoi dong, lang nghe cong " + port);
             while (running) {
                 Socket socket = serverSocket.accept(); // chờ thiết bị kết nối
                 System.out.println("[HUB] Ket noi moi tu " + socket.getRemoteSocketAddress());
-                pool.execute(new ClientHandler(socket, registry)); // mọi luồng dùng chung một registry
+                pool.execute(new ClientHandler(socket, registry, alerts));
             }
         } finally {
             watchdog.shutdownNow();
@@ -49,11 +52,12 @@ public class HubServer {
                 if (now - d.getLastSeen() > limit) {
                     System.out.println("[HUB] " + d.getId() + " qua " + Protocol.OFFLINE_TIMEOUT_SECONDS
                             + " giay khong gui STATUS -> ngat ket noi");
+                    ActivityLogger.log("Timeout: ngat " + d.getId() + " vi qua "
+                            + Protocol.OFFLINE_TIMEOUT_SECONDS + " giay khong gui STATUS");
                     d.getHandler().close();
                 }
             }
         } catch (RuntimeException e) {
-            // Nếu không bắt, một lỗi sẽ làm luồng kiểm tra dừng hẳn
             System.out.println("[HUB] Loi khi kiem tra timeout: " + e.getMessage());
         }
     }
