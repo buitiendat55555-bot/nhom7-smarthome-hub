@@ -1,16 +1,16 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- */
-
 package vn.nhom7.dashboard;
 
-/**
- *
- * @author Admin
- */
+import javax.swing.SwingUtilities;
+
+/** Mở Dashboard. Có thể truyền ID qua tham số, mặc định dashboard1. */
 public class Dashboard {
 
     public static void main(String[] args) {
-        System.out.println("Hello World!");
+        String id = (args.length > 0) ? args[0] : "dashboard1";
+        SwingUtilities.invokeLater(() -> {
+            DashboardFrame frame = new DashboardFrame(id);
+            frame.setVisible(true);
+            frame.connectToHub();
+        });
     }
 }
