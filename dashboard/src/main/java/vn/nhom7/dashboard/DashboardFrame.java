@@ -5,11 +5,14 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.Toolkit;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -21,25 +24,31 @@ import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.DefaultTableModel;
 import vn.nhom7.common.Message;
 import vn.nhom7.common.Protocol;
 
-/** Cửa sổ Dashboard: trạng thái kết nối, bảng thiết bị realtime, điều khiển, nhật ký. */
+/** Cửa sổ Dashboard: kết nối, bảng thiết bị realtime, điều khiển, nhật ký, cảnh báo, lịch sử log. */
 public class DashboardFrame extends JFrame {
 
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final DateTimeFormatter FULL = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final int ALERT_TAB = 1;
 
     private final DeviceTableModel model = new DeviceTableModel();
     private final JTable table = new JTable(model);
     private final JLabel connLabel = new JLabel();
     private final JButton connectBtn = new JButton("Kết nối Hub");
+    private final JButton historyBtn = new JButton("Lịch sử log");
     private final JTextArea logArea = new JTextArea(8, 40);
     private final HubConnection hub;
+    private final DashboardLog history;
 
     // Khu vực điều khiển (Issue #11)
     private final JLabel selectedLabel = new JLabel("Chọn một thiết bị trong bảng");
@@ -47,20 +56,36 @@ public class DashboardFrame extends JFrame {
     private final JPanel buttonsPanel = new JPanel(new GridLayout(0, 1, 0, 6));
     private final List<JButton> actionButtons = new ArrayList<>();
 
+    // Cảnh báo (Issue #14)
+    private final DefaultTableModel alertModel = new DefaultTableModel(
+            new String[]{"Thời gian", "Thiết bị", "Mức", "Nội dung"}, 0) {
+        @Override
+        public boolean isCellEditable(int row, int column) {
+            return false;
+        }
+    };
+    private final JTable alertTable = new JTable(alertModel);
+    private final JTabbedPane bottomTabs = new JTabbedPane();
+    private int unreadAlerts = 0;
+
     public DashboardFrame(String dashboardId) {
         super("Smart Home Dashboard - " + dashboardId);
+        history = new DashboardLog(dashboardId);
 
         // Tin từ Hub đến trên luồng mạng -> chuyển về luồng giao diện (EDT) trước khi đụng vào Swing
         hub = new HubConnection(dashboardId,
                 msg -> SwingUtilities.invokeLater(() -> handleMessage(msg)),
                 () -> SwingUtilities.invokeLater(this::onDisconnected));
 
-        // Thanh trên: trạng thái kết nối
+        // Thanh trên: trạng thái kết nối + nút
         connLabel.setFont(connLabel.getFont().deriveFont(Font.BOLD, 14f));
+        JPanel topButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        topButtons.add(historyBtn);
+        topButtons.add(connectBtn);
         JPanel top = new JPanel(new BorderLayout(8, 0));
         top.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
         top.add(connLabel, BorderLayout.CENTER);
-        top.add(connectBtn, BorderLayout.EAST);
+        top.add(topButtons, BorderLayout.EAST);
 
         // Giữa: bảng thiết bị
         table.setRowHeight(26);
@@ -69,7 +94,7 @@ public class DashboardFrame extends JFrame {
         JScrollPane tableScroll = new JScrollPane(table);
         tableScroll.setBorder(BorderFactory.createTitledBorder("Thiết bị"));
 
-        // Phải: khu vực điều khiển
+        // Phải: điều khiển
         JPanel control = new JPanel(new BorderLayout(0, 8));
         control.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createTitledBorder("Điều khiển"),
@@ -77,29 +102,41 @@ public class DashboardFrame extends JFrame {
         control.setPreferredSize(new Dimension(220, 0));
         hintLabel.setForeground(Color.GRAY);
         JPanel buttonsWrap = new JPanel(new BorderLayout());
-        buttonsWrap.add(buttonsPanel, BorderLayout.NORTH); // nút không bị kéo dãn hết chiều cao
+        buttonsWrap.add(buttonsPanel, BorderLayout.NORTH);
         control.add(selectedLabel, BorderLayout.NORTH);
         control.add(buttonsWrap, BorderLayout.CENTER);
         control.add(hintLabel, BorderLayout.SOUTH);
 
-        // Dưới: nhật ký
+        // Dưới: 2 tab Nhật ký / Cảnh báo
         logArea.setEditable(false);
-        JScrollPane logScroll = new JScrollPane(logArea);
-        logScroll.setBorder(BorderFactory.createTitledBorder("Nhật ký"));
+        alertTable.setRowHeight(24);
+        alertTable.getColumnModel().getColumn(0).setMaxWidth(90);
+        alertTable.getColumnModel().getColumn(1).setMaxWidth(110);
+        alertTable.getColumnModel().getColumn(2).setMaxWidth(90);
+        alertTable.setDefaultRenderer(Object.class, new AlertRenderer());
+        bottomTabs.addTab("Nhật ký", new JScrollPane(logArea));
+        bottomTabs.addTab("Cảnh báo", new JScrollPane(alertTable));
+        bottomTabs.setPreferredSize(new Dimension(0, 210));
+        bottomTabs.addChangeListener(e -> {
+            if (bottomTabs.getSelectedIndex() == ALERT_TAB) {
+                unreadAlerts = 0; // mở tab = đã xem
+                updateAlertTab();
+            }
+        });
 
         setLayout(new BorderLayout());
         add(top, BorderLayout.NORTH);
         add(tableScroll, BorderLayout.CENTER);
         add(control, BorderLayout.EAST);
-        add(logScroll, BorderLayout.SOUTH);
+        add(bottomTabs, BorderLayout.SOUTH);
 
-        // Chọn dòng khác trong bảng -> dựng lại các nút
         table.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
                 rebuildControls();
             }
         });
         connectBtn.addActionListener(e -> connectToHub());
+        historyBtn.addActionListener(e -> new HistoryDialog(this, history).setVisible(true));
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
@@ -107,7 +144,7 @@ public class DashboardFrame extends JFrame {
             }
         });
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(1000, 560);
+        setSize(1000, 600);
         setLocationRelativeTo(null);
         setConnected(false);
         rebuildControls();
@@ -156,11 +193,28 @@ public class DashboardFrame extends JFrame {
                 log("LỖI từ Hub: " + msg.getString("message"));
                 break;
             case ALERT:
-                log("CẢNH BÁO: " + msg.getString("message"));
+                addAlert(msg.getString("deviceId"), msg.getString("level"), msg.getString("message"));
                 break;
             default:
                 log("Nhận " + msg.getType());
         }
+    }
+
+    /** Thêm cảnh báo lên đầu bảng, kêu bíp, đánh dấu chưa xem nếu đang ở tab khác. */
+    private void addAlert(String deviceId, String level, String text) {
+        String lv = (level != null) ? level : "WARNING";
+        alertModel.insertRow(0, new Object[]{LocalTime.now().format(TIME), deviceId, lv, text});
+        log("CẢNH BÁO [" + lv + "] " + deviceId + ": " + text);
+        Toolkit.getDefaultToolkit().beep();
+        if (bottomTabs.getSelectedIndex() != ALERT_TAB) {
+            unreadAlerts++;
+            updateAlertTab();
+        }
+    }
+
+    private void updateAlertTab() {
+        bottomTabs.setTitleAt(ALERT_TAB, unreadAlerts > 0 ? "Cảnh báo (" + unreadAlerts + " mới)" : "Cảnh báo");
+        bottomTabs.setForegroundAt(ALERT_TAB, unreadAlerts > 0 ? Color.RED : null);
     }
 
     /** Dựng lại nút theo loại của thiết bị đang chọn. */
@@ -222,9 +276,11 @@ public class DashboardFrame extends JFrame {
         updateButtonsEnabled();
     }
 
+    /** Ghi lên màn hình (giờ:phút:giây) và nối vào file log (ngày giờ đầy đủ). */
     private void log(String text) {
         logArea.append("[" + LocalTime.now().format(TIME) + "] " + text + "\n");
         logArea.setCaretPosition(logArea.getDocument().getLength());
+        history.append(LocalDateTime.now().format(FULL) + " | " + text);
     }
 
     /** Thiết bị mất kết nối hiện chữ xám. */
@@ -235,6 +291,21 @@ public class DashboardFrame extends JFrame {
             Component c = super.getTableCellRendererComponent(t, value, selected, focus, row, column);
             if (!selected) {
                 c.setForeground(model.isOnline(row) ? Color.BLACK : Color.GRAY);
+            }
+            return c;
+        }
+    }
+
+    /** WARNING chữ đỏ đậm, INFO chữ xanh. */
+    private class AlertRenderer extends DefaultTableCellRenderer {
+        @Override
+        public Component getTableCellRendererComponent(JTable t, Object value, boolean selected,
+                boolean focus, int row, int column) {
+            Component c = super.getTableCellRendererComponent(t, value, selected, focus, row, column);
+            if (!selected) {
+                boolean warning = "WARNING".equals(alertModel.getValueAt(row, 2));
+                c.setForeground(warning ? new Color(200, 0, 0) : new Color(0, 90, 200));
+                c.setFont(c.getFont().deriveFont(warning ? Font.BOLD : Font.PLAIN));
             }
             return c;
         }
