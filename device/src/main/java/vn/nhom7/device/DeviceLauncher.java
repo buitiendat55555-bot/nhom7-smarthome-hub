@@ -20,6 +20,9 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import java.awt.Dimension;
+import java.awt.Toolkit;
+import vn.nhom7.common.ui.Ui;
 
 /** Trình khởi chạy: mở nhiều thiết bị (chọn loại + ID) trong cùng một chương trình. */
 public class DeviceLauncher extends JFrame {
@@ -46,9 +49,9 @@ public class DeviceLauncher extends JFrame {
         });
         typeBox.addActionListener(e -> suggestId());
 
-        JButton openBtn = new JButton("Mở thiết bị");
+        JButton openBtn = new Ui.RoundButton("Mở thiết bị", Ui.BLUE);
         openBtn.addActionListener(e -> openFromForm());
-        JButton demoBtn = new JButton("Mở bộ demo (Đèn, Cảm biến, Khóa, Camera)");
+        JButton demoBtn = new Ui.RoundButton("Mở bộ demo 5 thiết bị", Ui.ORANGE);
         demoBtn.addActionListener(e -> openDemoSet());
 
         JPanel form = new JPanel(new GridLayout(4, 2, 6, 6));
@@ -109,19 +112,20 @@ public class DeviceLauncher extends JFrame {
         suggestId();
     }
 
-    /** Mở light1, temp1, door1, cam1 (bỏ qua cái nào đã mở). */
+    /** Mở light1, temp1, door1, cam1, ac1 (bỏ qua cái nào đã mở) và xếp thành hàng cho dễ nhìn. */
     private void openDemoSet() {
+        nextOffset = 0;
         for (String type : DeviceFactory.TYPES) {
             String id = DeviceFactory.idPrefix(type) + "1";
             if (!openIds.contains(id)) {
-                open(type, id, DeviceFactory.label(type) + " 1");
+                open(type, id, DeviceFactory.demoName(type));
             }
         }
         suggestId();
     }
 
     private void open(String type, String id, String name) {
-        JFrame frame = DeviceFactory.create(type, id, name);
+        DeviceFrame frame = DeviceFactory.create(type, id, name);
 
         // Các cửa sổ thiết bị mặc định EXIT_ON_CLOSE (tắt cả chương trình).
         // Trong trình khởi chạy, đóng một thiết bị chỉ được đóng cửa sổ đó.
@@ -136,16 +140,25 @@ public class DeviceLauncher extends JFrame {
             }
         });
 
-        frame.setLocation(450 + nextOffset * 40, 40 + nextOffset * 40); // xếp lệch nhau cho dễ nhìn
-        nextOffset = (nextOffset + 1) % 8;
+        // Xếp các cửa sổ thành hàng ngang ở nửa dưới màn hình, hết chỗ thì xếp chồng lệch
+        Dimension screen = Toolkit.getDefaultToolkit().getScreenSize();
+        int perRow = Math.max(1, screen.width / frame.getWidth());
+        int col = nextOffset % perRow;
+        int rowIdx = nextOffset / perRow;
+        frame.setLocation(col * frame.getWidth() + rowIdx * 30,
+                Math.max(0, screen.height - frame.getHeight() - 50 - rowIdx * 30));
+        nextOffset = (nextOffset + 1) % 10;
 
         openIds.add(id);
         openModel.addElement(entry);
         frame.setVisible(true);
-        DeviceFactory.connect(frame);
+        frame.connectToHub();
     }
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> new DeviceLauncher().setVisible(true));
+        SwingUtilities.invokeLater(() -> {
+            Ui.install();
+            new DeviceLauncher().setVisible(true);
+        });
     }
 }

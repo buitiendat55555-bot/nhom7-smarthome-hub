@@ -1,107 +1,64 @@
 package vn.nhom7.device;
 
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Font;
-import java.awt.GridLayout;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
-import java.io.IOException;
-import java.util.Hashtable;
-import javax.swing.BorderFactory;
-import javax.swing.JButton;
-import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JOptionPane;
+import java.util.Random;
+import javax.swing.JCheckBox;
 import javax.swing.JPanel;
 import javax.swing.JSlider;
-import javax.swing.SwingConstants;
 import javax.swing.Timer;
-import vn.nhom7.common.Protocol;
+import vn.nhom7.common.ui.Ui;
 
-/** Cửa sổ mô phỏng cảm biến nhiệt: kéo thanh trượt để đổi nhiệt độ. */
-public class TempSensorFrame extends JFrame {
+/** Cửa sổ cảm biến nhiệt: thanh trượt 0-60 °C, 3 nút đặt nhanh và chế độ tự dao động. */
+public class TempSensorFrame extends DeviceFrame {
 
     private final TempSensorDevice sensor;
-    private final JLabel tempLabel = new JLabel("", SwingConstants.CENTER);
-    private final JLabel warnLabel = new JLabel(" ", SwingConstants.CENTER);
-    private final JSlider slider = new JSlider(0, 600, 280); // đơn vị 0,1 °C: 0..60 °C
-    private final JLabel connLabel = new JLabel("", SwingConstants.CENTER);
-    private final JButton connectBtn = new JButton("Kết nối Hub");
+    private final JSlider slider = new JSlider(0, 600, 280); // đơn vị 0,1 °C
+    private final JCheckBox autoBox = new JCheckBox("Tự dao động mỗi 2 giây (như cảm biến thật)");
+    private final Random random = new Random();
+    private boolean syncing;
 
     public TempSensorFrame(TempSensorDevice sensor) {
-        super("Cảm biến nhiệt - " + sensor.getDeviceId());
+        super(sensor);
         this.sensor = sensor;
 
-        tempLabel.setFont(tempLabel.getFont().deriveFont(Font.BOLD, 48f));
-        warnLabel.setFont(warnLabel.getFont().deriveFont(Font.BOLD, 14f));
-        warnLabel.setForeground(Color.RED);
-
-        Hashtable<Integer, JLabel> labels = new Hashtable<>();
-        for (int v = 0; v <= 600; v += 100) {
-            labels.put(v, new JLabel(String.valueOf(v / 10)));
-        }
-        slider.setLabelTable(labels);
-        slider.setPaintLabels(true);
-        slider.setMajorTickSpacing(100);
-        slider.setPaintTicks(true);
+        slider.setOpaque(false);
         slider.addChangeListener(e -> {
-            refreshTemp(slider.getValue() / 10.0);
-            if (!slider.getValueIsAdjusting()) {
+            if (!syncing && !slider.getValueIsAdjusting()) {
                 sensor.setTemperature(slider.getValue() / 10.0); // chỉ gửi khi thả chuột
             }
         });
+        JPanel sliderRow = new JPanel(new BorderLayout(8, 0));
+        sliderRow.setOpaque(false);
+        sliderRow.add(Ui.label("0 °C", Font.PLAIN, 12, Ui.MUTED), BorderLayout.WEST);
+        sliderRow.add(slider, BorderLayout.CENTER);
+        sliderRow.add(Ui.label("60 °C", Font.PLAIN, 12, Ui.MUTED), BorderLayout.EAST);
 
-        JPanel center = new JPanel(new GridLayout(2, 1));
-        center.add(tempLabel);
-        center.add(warnLabel);
+        Ui.RoundButton cool = new Ui.RoundButton("Mát 24°", Ui.BLUE);
+        Ui.RoundButton warm = new Ui.RoundButton("Ấm 33°", Ui.TEAL);
+        Ui.RoundButton fire = new Ui.RoundButton("Nóng 45°", Ui.RED);
+        cool.addActionListener(e -> sensor.setTemperature(24));
+        warm.addActionListener(e -> sensor.setTemperature(33));
+        fire.addActionListener(e -> sensor.setTemperature(45));
 
-        JPanel bottom = new JPanel(new GridLayout(3, 1, 0, 6));
-        bottom.setBorder(BorderFactory.createEmptyBorder(8, 12, 12, 12));
-        bottom.add(slider);
-        bottom.add(connLabel);
-        bottom.add(connectBtn);
-
-        setLayout(new BorderLayout());
-        add(center, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
-
-        connectBtn.addActionListener(e -> connectToHub());
-        new Timer(1000, e -> refreshConnection()).start();
-        addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                sensor.disconnect();
+        autoBox.setOpaque(false);
+        autoBox.setFont(Ui.font(Font.PLAIN, 12));
+        new Timer(2000, e -> {
+            if (autoBox.isSelected()) {
+                sensor.setTemperature(sensor.getTemperature() + (random.nextDouble() - 0.5));
             }
-        });
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(340, 360);
-        setLocationRelativeTo(null);
+        }).start();
 
-        refreshTemp(sensor.getTemperature());
-        refreshConnection();
+        setControls(column(sliderRow, row(cool, warm, fire), autoBox));
     }
 
-    public void connectToHub() {
-        try {
-            sensor.connect();
-        } catch (IOException ex) {
-            JOptionPane.showMessageDialog(this, "Không kết nối được Hub: " + ex.getMessage());
+    @Override
+    protected void onStateChanged() {
+        if (sensor == null) {
+            return;
         }
-        refreshConnection();
-    }
-
-    private void refreshTemp(double t) {
-        tempLabel.setText(String.format("%.1f °C", t));
-        boolean hot = t > Protocol.TEMP_ALERT_THRESHOLD;
-        tempLabel.setForeground(hot ? Color.RED : new Color(0, 110, 200));
-        warnLabel.setText(hot ? "Vượt ngưỡng " + (int) Protocol.TEMP_ALERT_THRESHOLD + " °C!" : " ");
-    }
-
-    private void refreshConnection() {
-        boolean connected = sensor.isConnected();
-        connLabel.setText(connected ? "Đã kết nối Hub" : "Chưa kết nối Hub");
-        connLabel.setForeground(connected ? new Color(0, 140, 0) : Color.RED);
-        connectBtn.setEnabled(!connected);
+        syncing = true;
+        slider.setValue((int) Math.round(sensor.getTemperature() * 10));
+        syncing = false;
     }
 }

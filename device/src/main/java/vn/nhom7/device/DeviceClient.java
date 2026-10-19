@@ -12,6 +12,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import vn.nhom7.common.JsonUtil;
 import vn.nhom7.common.Message;
 import vn.nhom7.common.MessageType;
@@ -35,6 +36,11 @@ public abstract class DeviceClient {
     private volatile boolean stopped; // true khi người dùng chủ động ngắt -> không tự kết nối lại
     private final AtomicBoolean reconnecting = new AtomicBoolean(); // tránh chạy 2 vòng thử lại cùng lúc
 
+    // Giao diện đăng ký để hiện "vừa nhận lệnh" và "vừa gửi STATUS" (gọi trên luồng mạng)
+    private volatile Consumer<String> onCommand = text -> { };
+    private volatile Runnable onStatusSent = () -> { };
+    private volatile Runnable onStateChange = () -> { };
+
     protected DeviceClient(String deviceId, String deviceType, String name) {
         this.deviceId = deviceId;
         this.deviceType = deviceType;
@@ -46,6 +52,44 @@ public abstract class DeviceClient {
 
     /** Thực thi lệnh, trả về câu mô tả kết quả. Ném IllegalArgumentException nếu lệnh không hỗ trợ. */
     protected abstract String executeCommand(String action);
+
+    /**
+     * Lệnh có kèm giá trị (ví dụ BRIGHTNESS với value = 30). Mặc định bỏ qua value;
+     * thiết bị nào cần giá trị thì override hàm này.
+     */
+    protected String executeCommand(String action, JsonObject payload) {
+        return executeCommand(action);
+    }
+
+    public void setOnCommand(Consumer<String> listener) {
+        this.onCommand = (listener != null) ? listener : text -> { };
+    }
+
+    public void setOnStatusSent(Runnable listener) {
+        this.onStatusSent = (listener != null) ? listener : () -> { };
+    }
+
+    /** Giao diện đăng ký để vẽ lại mỗi khi trạng thái thiết bị thay đổi. */
+    public void setOnStateChange(Runnable listener) {
+        this.onStateChange = (listener != null) ? listener : () -> { };
+    }
+
+    /** Lớp con gọi sau khi đổi trạng thái (do người bấm hoặc do lệnh từ Hub). */
+    protected void stateChanged() {
+        onStateChange.run();
+    }
+
+    public String getDeviceId() {
+        return deviceId;
+    }
+
+    public String getDeviceType() {
+        return deviceType;
+    }
+
+    public String getName() {
+        return name;
+    }
 
     /** Kết nối tới Hub mặc định (127.0.0.1:5000). */
     public void connect() throws IOException {
@@ -157,20 +201,28 @@ public abstract class DeviceClient {
 
         JsonObject ack = new JsonObject();
         ack.addProperty("commandId", msg.getString("commandId"));
+        String action = msg.getString("action");
+        String value = msg.getString("value");
+        String what = action + (value != null ? " " + value : "") + "  ← " + msg.getFrom();
         try {
-            String result = executeCommand(msg.getString("action"));
+            String result = executeCommand(action, msg.getPayload());
             ack.addProperty("ok", true);
             ack.addProperty("message", result);
-        } catch (IllegalArgumentException e) {
+            onCommand.accept("✔ " + what);
+        } catch (RuntimeException e) { // lệnh lạ hoặc value sai kiểu số
             ack.addProperty("ok", false);
             ack.addProperty("message", e.getMessage());
+            onCommand.accept("✖ Từ chối " + what);
         }
         send(MessageType.ACK, msg.getFrom(), ack);
         sendStatus(); // báo ngay trạng thái mới sau khi thực thi lệnh
     }
 
     public void sendStatus() {
-        send(MessageType.STATUS, null, getState());
+        if (connected) {
+            send(MessageType.STATUS, null, getState());
+            onStatusSent.run();
+        }
     }
 
     /** synchronized vì luồng nghe lệnh, luồng gửi định kỳ và giao diện cùng ghi vào socket. */

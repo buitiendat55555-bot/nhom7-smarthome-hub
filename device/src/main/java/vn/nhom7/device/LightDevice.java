@@ -1,60 +1,99 @@
 package vn.nhom7.device;
 
 import com.google.gson.JsonObject;
-import java.util.function.Consumer;
 
-/** Đèn thông minh: trạng thái ON/OFF, nhận lệnh ON/OFF từ Hub. */
+/** Đèn thông minh: bật/tắt, độ sáng 1-100 %, màu ánh sáng. */
 public class LightDevice extends DeviceClient {
 
+    public static final String DEFAULT_COLOR = "#FFC83D";
+
     private volatile boolean on;
-    private Consumer<Boolean> onChange = state -> { };
+    private volatile int brightness = 100;
+    private volatile String color = DEFAULT_COLOR;
 
     public LightDevice(String deviceId, String name) {
         super(deviceId, "LIGHT", name);
-    }
-
-    /** Giao diện đăng ký hàm này để được báo mỗi khi đèn đổi trạng thái. */
-    public void setOnChange(Consumer<Boolean> listener) {
-        this.onChange = (listener != null) ? listener : state -> { };
     }
 
     public boolean isOn() {
         return on;
     }
 
-    public String getDeviceId() {
-        return deviceId;
+    public int getBrightness() {
+        return brightness;
+    }
+
+    public String getColor() {
+        return color;
     }
 
     /** Người dùng bấm nút ngay trên thiết bị: đổi trạng thái và báo Hub luôn. */
     public void toggle() {
-        setOn(!on);
-        sendStatus();
+        on = !on;
+        changed();
     }
 
-    private void setOn(boolean value) {
-        on = value;
-        onChange.accept(value);
+    public void setBrightness(int value) {
+        brightness = Math.max(1, Math.min(100, value));
+        on = true;
+        changed();
+    }
+
+    public void setColor(String hex) {
+        color = hex;
+        on = true;
+        changed();
+    }
+
+    private void changed() {
+        stateChanged();
+        sendStatus();
     }
 
     @Override
     protected JsonObject getState() {
         JsonObject s = new JsonObject();
         s.addProperty("power", on ? "ON" : "OFF");
+        s.addProperty("brightness", brightness);
+        s.addProperty("color", color);
         return s;
     }
 
-    /** Được gọi trên luồng nghe lệnh của DeviceClient khi Hub gửi COMMAND. */
     @Override
     protected String executeCommand(String action) {
         if ("ON".equals(action)) {
-            setOn(true);
+            on = true;
+            stateChanged();
             return "Da bat den";
         }
         if ("OFF".equals(action)) {
-            setOn(false);
+            on = false;
+            stateChanged();
             return "Da tat den";
         }
         throw new IllegalArgumentException("Lenh khong ho tro: " + action);
+    }
+
+    /** BRIGHTNESS và COLOR cần thêm trường value trong payload. */
+    @Override
+    protected String executeCommand(String action, JsonObject payload) {
+        if ("BRIGHTNESS".equals(action)) {
+            int v = payload.get("value").getAsInt();
+            brightness = Math.max(1, Math.min(100, v));
+            on = true;
+            stateChanged();
+            return "Do sang " + brightness + "%";
+        }
+        if ("COLOR".equals(action)) {
+            String hex = payload.get("value").getAsString();
+            if (!hex.matches("#[0-9A-Fa-f]{6}")) {
+                throw new IllegalArgumentException("Mau khong hop le: " + hex);
+            }
+            color = hex.toUpperCase();
+            on = true;
+            stateChanged();
+            return "Doi mau " + color;
+        }
+        return executeCommand(action);
     }
 }

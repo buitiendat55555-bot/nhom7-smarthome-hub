@@ -2,126 +2,66 @@ package vn.nhom7.device;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.Font;
-import java.awt.Graphics;
-import java.awt.Graphics2D;
 import java.awt.GridLayout;
-import java.awt.RenderingHints;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
-import java.io.IOException;
-import javax.swing.BorderFactory;
-import javax.swing.JButton;
-import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
-import javax.swing.Timer;
+import javax.swing.JSlider;
+import vn.nhom7.common.ui.Ui;
 
-/** Cửa sổ mô phỏng đèn: bóng đèn đổi màu, nút bật/tắt, trạng thái kết nối Hub. */
-public class LightFrame extends JFrame {
+/** Cửa sổ đèn: nút bật/tắt, thanh độ sáng, 5 màu có sẵn. */
+public class LightFrame extends DeviceFrame {
+
+    /** Màu ánh sáng: tên hiện trên nút -> mã màu gửi đi. */
+    static final String[][] COLORS = {
+        {"Vàng", LightDevice.DEFAULT_COLOR}, {"Trắng", "#E5E7EB"}, {"Xanh", "#60A5FA"},
+        {"Hồng", "#F472B6"}, {"Lá", "#4ADE80"}
+    };
 
     private final LightDevice light;
-    private final BulbPanel bulb = new BulbPanel();
-    private final JLabel stateLabel = new JLabel("", SwingConstants.CENTER);
-    private final JLabel connLabel = new JLabel("", SwingConstants.CENTER);
-    private final JButton toggleBtn = new JButton("Bật / Tắt");
-    private final JButton connectBtn = new JButton("Kết nối Hub");
+    private final Ui.RoundButton toggleBtn = new Ui.RoundButton("", Ui.ORANGE);
+    private final JSlider slider = new JSlider(1, 100, 100);
+    private boolean syncing; // đang đồng bộ thanh trượt theo lệnh từ Hub -> không gửi ngược lại
 
     public LightFrame(LightDevice light) {
-        super("Đèn - " + light.getDeviceId());
+        super(light);
         this.light = light;
 
-        stateLabel.setFont(stateLabel.getFont().deriveFont(Font.BOLD, 16f));
-
-        JPanel buttons = new JPanel(new GridLayout(1, 2, 8, 0));
-        buttons.add(toggleBtn);
-        buttons.add(connectBtn);
-
-        JPanel bottom = new JPanel(new GridLayout(3, 1, 0, 6));
-        bottom.setBorder(BorderFactory.createEmptyBorder(8, 12, 12, 12));
-        bottom.add(stateLabel);
-        bottom.add(connLabel);
-        bottom.add(buttons);
-
-        setLayout(new BorderLayout());
-        add(bulb, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
-
-        // Lệnh từ Hub chạy trên luồng mạng -> phải chuyển về luồng giao diện (EDT) mới được vẽ lại
-        light.setOnChange(on -> SwingUtilities.invokeLater(this::refreshState));
         toggleBtn.addActionListener(e -> light.toggle());
-        connectBtn.addActionListener(e -> connectToHub());
-
-        // Mỗi giây kiểm tra trạng thái kết nối một lần
-        new Timer(1000, e -> refreshConnection()).start();
-
-        addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                light.disconnect();
+        slider.setOpaque(false);
+        slider.addChangeListener(e -> {
+            if (!syncing && !slider.getValueIsAdjusting()) {
+                light.setBrightness(slider.getValue()); // chỉ gửi khi thả chuột
             }
         });
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(300, 400);
-        setLocationRelativeTo(null);
 
-        refreshState();
-        refreshConnection();
-    }
+        JPanel sliderRow = new JPanel(new BorderLayout(8, 0));
+        sliderRow.setOpaque(false);
+        sliderRow.add(Ui.label("Độ sáng", Font.PLAIN, 13, Ui.MUTED), BorderLayout.WEST);
+        sliderRow.add(slider, BorderLayout.CENTER);
 
-    public void connectToHub() {
-        try {
-            light.connect();
-        } catch (IOException ex) {
-            JOptionPane.showMessageDialog(this, "Không kết nối được Hub: " + ex.getMessage());
+        JPanel swatches = new JPanel(new GridLayout(1, COLORS.length, 6, 0));
+        swatches.setOpaque(false);
+        for (String[] c : COLORS) {
+            Color col = Color.decode(c[1]);
+            Ui.RoundButton b = new Ui.RoundButton("", col);
+            b.setToolTipText("Màu " + c[0]);
+            b.setPreferredSize(new Dimension(40, 28));
+            b.addActionListener(e -> light.setColor(c[1]));
+            swatches.add(b);
         }
-        refreshConnection();
+        setControls(column(toggleBtn, sliderRow, swatches));
     }
 
-    private void refreshState() {
-        bulb.setOn(light.isOn());
-        stateLabel.setText(light.isOn() ? "Đèn đang BẬT" : "Đèn đang TẮT");
-    }
-
-    private void refreshConnection() {
-        boolean connected = light.isConnected();
-        connLabel.setText(connected ? "Đã kết nối Hub" : "Chưa kết nối Hub");
-        connLabel.setForeground(connected ? new Color(0, 140, 0) : Color.RED);
-        connectBtn.setEnabled(!connected);
-    }
-
-    /** Vẽ bóng đèn: vàng và có quầng sáng khi bật, xám khi tắt. */
-    private static class BulbPanel extends JPanel {
-
-        private boolean on;
-
-        void setOn(boolean on) {
-            this.on = on;
-            repaint();
+    @Override
+    protected void onStateChanged() {
+        if (light == null) {
+            return; // gọi từ constructor lớp cha trước khi gán light
         }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            super.paintComponent(g);
-            Graphics2D g2 = (Graphics2D) g;
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-            int size = Math.min(getWidth(), getHeight()) - 70;
-            int x = (getWidth() - size) / 2;
-            int y = 25;
-
-            if (on) {
-                g2.setColor(new Color(255, 230, 120, 90));
-                g2.fillOval(x - 15, y - 15, size + 30, size + 30);
-            }
-            g2.setColor(on ? new Color(255, 210, 0) : new Color(170, 170, 170));
-            g2.fillOval(x, y, size, size);
-
-            g2.setColor(Color.DARK_GRAY);
-            g2.fillRect(getWidth() / 2 - size / 6, y + size - 5, size / 3, 25);
-        }
+        toggleBtn.setText(light.isOn() ? "Tắt đèn" : "Bật đèn");
+        toggleBtn.setColor(light.isOn() ? Ui.NAVY : Ui.ORANGE);
+        syncing = true;
+        slider.setValue(light.getBrightness());
+        syncing = false;
     }
 }

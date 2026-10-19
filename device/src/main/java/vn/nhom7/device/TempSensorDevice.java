@@ -11,17 +11,14 @@ public class TempSensorDevice extends DeviceClient {
         super(deviceId, "TEMP_SENSOR", name);
     }
 
-    public String getDeviceId() {
-        return deviceId;
-    }
-
     public double getTemperature() {
         return temperature;
     }
 
-    /** Đổi nhiệt độ (từ thanh trượt) và báo Hub ngay, không chờ chu kỳ 5 giây. */
+    /** Đổi nhiệt độ (thanh trượt, nút có sẵn) và báo Hub ngay, không chờ chu kỳ 5 giây. */
     public void setTemperature(double value) {
-        temperature = Math.round(value * 10) / 10.0; // làm tròn 1 chữ số thập phân
+        temperature = Math.round(Math.max(0, Math.min(60, value)) * 10) / 10.0; // làm tròn 1 chữ số
+        stateChanged();
         sendStatus();
     }
 

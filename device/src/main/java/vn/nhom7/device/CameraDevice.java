@@ -13,7 +13,6 @@ public class CameraDevice extends DeviceClient {
 
     private volatile boolean recording;
     private volatile boolean motion;
-    private Runnable onChange = () -> { };
 
     // Luồng hẹn giờ tắt "chuyển động" sau MOTION_SECONDS giây; daemon để không giữ chương trình chạy
     private final ScheduledExecutorService motionTimer = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -27,14 +26,6 @@ public class CameraDevice extends DeviceClient {
         super(deviceId, "CAMERA", name);
     }
 
-    public void setOnChange(Runnable listener) {
-        this.onChange = (listener != null) ? listener : () -> { };
-    }
-
-    public String getDeviceId() {
-        return deviceId;
-    }
-
     public boolean isRecording() {
         return recording;
     }
@@ -46,21 +37,21 @@ public class CameraDevice extends DeviceClient {
     /** Người dùng bấm nút ghi ngay trên camera. */
     public void toggleRecording() {
         recording = !recording;
-        onChange.run();
+        stateChanged();
         sendStatus();
     }
 
     /** Giả lập có người đi qua: motion = true trong MOTION_SECONDS giây rồi tự tắt. */
     public synchronized void triggerMotion() {
         motion = true;
-        onChange.run();
+        stateChanged();
         sendStatus();
         if (motionReset != null) {
             motionReset.cancel(false); // bấm liên tiếp thì tính lại từ đầu
         }
         motionReset = motionTimer.schedule(() -> {
             motion = false;
-            onChange.run();
+            stateChanged();
             sendStatus();
         }, MOTION_SECONDS, TimeUnit.SECONDS);
     }
@@ -77,12 +68,12 @@ public class CameraDevice extends DeviceClient {
     protected String executeCommand(String action) {
         if ("START_RECORDING".equals(action)) {
             recording = true;
-            onChange.run();
+            stateChanged();
             return "Da bat dau ghi hinh";
         }
         if ("STOP_RECORDING".equals(action)) {
             recording = false;
-            onChange.run();
+            stateChanged();
             return "Da dung ghi hinh";
         }
         throw new IllegalArgumentException("Lenh khong ho tro: " + action);
