@@ -21,6 +21,14 @@ public class AlertService {
             checkTemperature(d, before, after);
         } else if ("CAMERA".equals(d.getType())) {
             checkMotion(d, before, after);
+        } else if ("DOOR_LOCK".equals(d.getType())) {
+            checkDoorbell(d, before, after);
+        }
+    }
+
+    private void checkDoorbell(DeviceInfo d, JsonObject before, JsonObject after) {
+        if (bool(after, "ringing") && !bool(before, "ringing")) {
+            send(d.getId(), "INFO", "Có khách bấm chuông tại " + d.getName());
         }
     }
 
@@ -45,7 +53,7 @@ public class AlertService {
         }
     }
 
-    private boolean anyDoorLocked() {
+    boolean anyDoorLocked() {
         for (DeviceInfo x : registry.getDevices()) {
             if ("DOOR_LOCK".equals(x.getType()) && bool(x.getState(), "locked")) {
                 return true;
@@ -54,7 +62,8 @@ public class AlertService {
         return false;
     }
 
-    private void send(String deviceId, String level, String text) {
+    /** Gửi ALERT cho mọi Dashboard, in ra màn hình Hub và ghi log. AutomationService cũng dùng hàm này. */
+    void send(String deviceId, String level, String text) {
         JsonObject p = new JsonObject();
         p.addProperty("deviceId", deviceId);
         p.addProperty("level", level);
@@ -64,12 +73,12 @@ public class AlertService {
         ActivityLogger.log("ALERT " + level + " " + deviceId + ": " + text);
     }
 
-    private static double number(JsonObject o, String key) {
+    static double number(JsonObject o, String key) {
         JsonElement e = (o != null) ? o.get(key) : null;
         return (e == null || e.isJsonNull()) ? Double.NaN : e.getAsDouble();
     }
 
-    private static boolean bool(JsonObject o, String key) {
+    static boolean bool(JsonObject o, String key) {
         JsonElement e = (o != null) ? o.get(key) : null;
         return e != null && !e.isJsonNull() && e.getAsBoolean();
     }

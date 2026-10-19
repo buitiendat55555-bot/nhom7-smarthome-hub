@@ -15,6 +15,7 @@ public class HubServer {
     private final int port;
     private final DeviceRegistry registry;
     private final AlertService alerts;
+    private final AutomationService automation;
     private final ExecutorService pool = Executors.newFixedThreadPool(20);
     private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor();
     private volatile boolean running;
@@ -23,6 +24,7 @@ public class HubServer {
         this.port = port;
         this.registry = registry;
         this.alerts = new AlertService(registry);
+        this.automation = new AutomationService(registry, alerts);
     }
 
     public void start() throws IOException {
@@ -35,7 +37,7 @@ public class HubServer {
             while (running) {
                 Socket socket = serverSocket.accept(); // chờ thiết bị kết nối
                 System.out.println("[HUB] Ket noi moi tu " + socket.getRemoteSocketAddress());
-                pool.execute(new ClientHandler(socket, registry, alerts));
+                pool.execute(new ClientHandler(socket, registry, alerts, automation));
             }
         } finally {
             watchdog.shutdownNow();
