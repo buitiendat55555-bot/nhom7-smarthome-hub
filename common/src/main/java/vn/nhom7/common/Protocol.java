@@ -9,6 +9,8 @@ public final class Protocol {
     public static final int STATUS_INTERVAL_SECONDS = 5;
     public static final int OFFLINE_TIMEOUT_SECONDS = 15;
     public static final double TEMP_ALERT_THRESHOLD = 40.0;
+    /** Nhiệt độ máy lạnh được Hub tự đặt khi cảm biến vượt ngưỡng. */
+    public static final int AUTO_COOL_TEMP = 22;
 
     public static final String ROLE_DEVICE = "DEVICE";
     public static final String ROLE_DASHBOARD = "DASHBOARD";
