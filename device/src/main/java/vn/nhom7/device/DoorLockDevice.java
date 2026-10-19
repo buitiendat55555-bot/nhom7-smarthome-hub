@@ -1,24 +1,27 @@
 package vn.nhom7.device;
 
 import com.google.gson.JsonObject;
-import java.util.function.Consumer;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
-/** Khóa cửa thông minh: trạng thái locked, nhận lệnh LOCK/UNLOCK. */
+/** Khóa cửa thông minh: trạng thái locked, nhận lệnh LOCK/UNLOCK, có chuông cửa. */
 public class DoorLockDevice extends DeviceClient {
 
+    public static final int RING_SECONDS = 4;
+
     private volatile boolean locked = true;
-    private Consumer<Boolean> onChange = state -> { };
+    private volatile boolean ringing;
+    private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "doorbell-timer");
+        t.setDaemon(true);
+        return t;
+    });
+    private ScheduledFuture<?> ringReset;
 
     public DoorLockDevice(String deviceId, String name) {
         super(deviceId, "DOOR_LOCK", name);
-    }
-
-    public void setOnChange(Consumer<Boolean> listener) {
-        this.onChange = (listener != null) ? listener : state -> { };
-    }
-
-    public String getDeviceId() {
-        return deviceId;
     }
 
     public boolean isLocked() {
@@ -27,30 +30,44 @@ public class DoorLockDevice extends DeviceClient {
 
     /** Người dùng bấm nút ngay trên khóa: đổi trạng thái và báo Hub luôn. */
     public void toggle() {
-        setLocked(!locked);
+        locked = !locked;
+        stateChanged();
         sendStatus();
     }
 
-    private void setLocked(boolean value) {
-        locked = value;
-        onChange.accept(value);
+    /** Khách bấm chuông: ringing = true trong RING_SECONDS giây; Hub sẽ báo lên Dashboard. */
+    public synchronized void ring() {
+        ringing = true;
+        stateChanged();
+        sendStatus();
+        if (ringReset != null) {
+            ringReset.cancel(false);
+        }
+        ringReset = timer.schedule(() -> {
+            ringing = false;
+            stateChanged();
+            sendStatus();
+        }, RING_SECONDS, TimeUnit.SECONDS);
     }
 
     @Override
     protected JsonObject getState() {
         JsonObject s = new JsonObject();
         s.addProperty("locked", locked);
+        s.addProperty("ringing", ringing);
         return s;
     }
 
     @Override
     protected String executeCommand(String action) {
         if ("LOCK".equals(action)) {
-            setLocked(true);
+            locked = true;
+            stateChanged();
             return "Da khoa cua";
         }
         if ("UNLOCK".equals(action)) {
-            setLocked(false);
+            locked = false;
+            stateChanged();
             return "Da mo khoa";
         }
         throw new IllegalArgumentException("Lenh khong ho tro: " + action);

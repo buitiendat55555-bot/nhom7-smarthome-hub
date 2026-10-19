@@ -9,6 +9,7 @@ import java.io.PrintWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import vn.nhom7.common.JsonUtil;
 import vn.nhom7.common.Message;
@@ -22,6 +23,8 @@ public class HubConnection {
     private final Consumer<Message> onMessage;
     private final Runnable onDisconnect;
     private final AtomicInteger commandCounter = new AtomicInteger();
+    // Báo cho tab "Gói tin" từng dòng JSON đi/đến: (true = gửi đi, dòng JSON)
+    private volatile BiConsumer<Boolean, String> traffic = (out, line) -> { };
 
     private Socket socket;
     private PrintWriter out;
@@ -35,6 +38,10 @@ public class HubConnection {
         this.dashboardId = dashboardId;
         this.onMessage = onMessage;
         this.onDisconnect = onDisconnect;
+    }
+
+    public void setTrafficListener(BiConsumer<Boolean, String> listener) {
+        this.traffic = (listener != null) ? listener : (o, l) -> { };
     }
 
     /** Kết nối, bật luồng nghe, rồi đăng ký với role DASHBOARD. */
@@ -59,6 +66,7 @@ public class HubConnection {
                 new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = in.readLine()) != null) {
+                traffic.accept(false, line);
                 try {
                     onMessage.accept(JsonUtil.fromJson(line));
                 } catch (IllegalArgumentException e) {
@@ -78,10 +86,20 @@ public class HubConnection {
      * AtomicInteger để hai lần bấm nhanh liên tiếp không bị trùng mã.
      */
     public String sendCommand(String deviceId, String action) {
+        return sendCommand(deviceId, action, null);
+    }
+
+    /** Lệnh có giá trị: BRIGHTNESS 30, COLOR "#60A5FA", SET_TEMP 22. value = null nếu không cần. */
+    public String sendCommand(String deviceId, String action, Object value) {
         String commandId = "c-" + commandCounter.incrementAndGet();
         JsonObject p = new JsonObject();
         p.addProperty("commandId", commandId);
         p.addProperty("action", action);
+        if (value instanceof Number) {
+            p.addProperty("value", (Number) value);
+        } else if (value != null) {
+            p.addProperty("value", value.toString());
+        }
         send(new Message(MessageType.COMMAND, dashboardId, deviceId, p));
         return commandId;
     }
@@ -89,7 +107,9 @@ public class HubConnection {
     /** synchronized vì giao diện và luồng nghe có thể cùng gửi. */
     public synchronized void send(Message message) {
         if (connected && out != null) {
-            out.println(JsonUtil.toJson(message));
+            String line = JsonUtil.toJson(message);
+            out.println(line);
+            traffic.accept(true, line);
         }
     }
 

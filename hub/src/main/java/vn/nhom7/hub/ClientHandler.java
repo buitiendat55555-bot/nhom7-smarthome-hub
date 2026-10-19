@@ -19,13 +19,16 @@ public class ClientHandler implements Runnable {
     private final Socket socket;
     private final DeviceRegistry registry;
     private final AlertService alerts;
+    private final AutomationService automation;
     private PrintWriter out;
     private volatile String clientId; // null cho tới khi REGISTER thành công
 
-    public ClientHandler(Socket socket, DeviceRegistry registry, AlertService alerts) {
+    public ClientHandler(Socket socket, DeviceRegistry registry, AlertService alerts,
+            AutomationService automation) {
         this.socket = socket;
         this.registry = registry;
         this.alerts = alerts;
+        this.automation = automation;
     }
 
     @Override
@@ -131,6 +134,7 @@ public class ClientHandler implements Runnable {
         if (isDashboard) {
             JsonObject list = new JsonObject();
             list.add("devices", registry.toJsonArray());
+            list.addProperty("automation", automation.isEnabled());
             send(new Message(MessageType.DEVICE_LIST, Protocol.HUB_ID, id, list));
         } else {
             broadcastDeviceUpdate(info);
@@ -146,8 +150,10 @@ public class ClientHandler implements Runnable {
         }
         JsonObject before = d.getState();   // trạng thái cũ để so sánh
         d.updateState(msg.getPayload());
-        alerts.check(d, before, d.getState());
+        JsonObject after = d.getState();
         broadcastDeviceUpdate(d);
+        alerts.check(d, before, after);
+        automation.check(d, before, after);
     }
 
     /** Dashboard -> Hub -> thiết bị. */
@@ -157,6 +163,10 @@ public class ClientHandler implements Runnable {
             return;
         }
         String target = msg.getTo();
+        if (Protocol.HUB_ID.equals(target)) {
+            handleHubCommand(msg); // lệnh gửi cho chính Hub (bật/tắt tự động hóa)
+            return;
+        }
         DeviceInfo d = registry.getDevice(target);
         if (d == null) {
             sendError("Thiet bi " + target + " khong ton tai hoac da ngat ket noi");
@@ -164,16 +174,37 @@ public class ClientHandler implements Runnable {
             return;
         }
         d.getHandler().send(new Message(MessageType.COMMAND, clientId, target, msg.getPayload()));
-        System.out.println("[HUB] Chuyen COMMAND " + msg.getString("action")
-                + " tu " + clientId + " toi " + target);
-        ActivityLogger.log("Lenh " + msg.getString("action") + " (" + msg.getString("commandId")
+        String value = msg.getString("value");
+        String action = msg.getString("action") + (value != null ? " " + value : "");
+        System.out.println("[HUB] Chuyen COMMAND " + action + " tu " + clientId + " toi " + target);
+        ActivityLogger.log("Lenh " + action + " (" + msg.getString("commandId")
                 + ") tu " + clientId + " toi " + target);
+    }
+
+    /** AUTOMATION_ON / AUTOMATION_OFF: Hub tự xử lý rồi trả ACK, không chuyển cho thiết bị nào. */
+    private void handleHubCommand(Message msg) {
+        String action = msg.getString("action");
+        JsonObject p = new JsonObject();
+        p.addProperty("commandId", msg.getString("commandId"));
+        if ("AUTOMATION_ON".equals(action) || "AUTOMATION_OFF".equals(action)) {
+            automation.setEnabled("AUTOMATION_ON".equals(action));
+            p.addProperty("ok", true);
+            p.addProperty("message", automation.isEnabled() ? "Da bat tu dong hoa" : "Da tat tu dong hoa");
+        } else {
+            p.addProperty("ok", false);
+            p.addProperty("message", "Hub khong ho tro lenh " + action);
+        }
+        p.addProperty("automation", automation.isEnabled());
+        send(new Message(MessageType.ACK, Protocol.HUB_ID, clientId, p));
     }
 
     /** Thiết bị -> Hub -> đúng Dashboard đã ra lệnh. */
     private void handleAck(Message msg) {
         ActivityLogger.log("Ket qua lenh " + msg.getString("commandId") + " tu " + clientId + ": "
                 + (msg.getBoolean("ok", false) ? "thanh cong" : "that bai") + " - " + msg.getString("message"));
+        if (Protocol.HUB_ID.equals(msg.getTo())) {
+            return; // kết quả của lệnh tự động do chính Hub gửi: chỉ cần ghi log ở trên
+        }
         ClientHandler dash = registry.getDashboard(msg.getTo());
         if (dash == null) {
             System.out.println("[HUB] Bo qua ACK tu " + clientId + ": khong tim thay Dashboard " + msg.getTo());
